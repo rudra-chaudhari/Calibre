@@ -1,26 +1,24 @@
 import 'package:flutter/material.dart';
-import 'screens/day_screen.dart';
+
 import 'screens/app_shell.dart';
-import 'utils/date_utils.dart';
+
 void main() {
   runApp(const MyApp());
 }
-
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    
     return MaterialApp(
       title: 'Calibre',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFF26D4A)),
+        useMaterial3: true,
       ),
-      home: AppShell()
-      );
-  
+      home: const AppShell(),
+    );
   }
 }
-
