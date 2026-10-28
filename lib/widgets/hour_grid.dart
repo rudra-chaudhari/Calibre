@@ -3,8 +3,8 @@ import 'package:calibre/utils/date_utils.dart';
 
 class HourGrid extends StatefulWidget {
   static const double hourHeight = 100;
-  static const int startHour = 7;
-  static const int endHour = 23;
+  static const int startHour = 6;
+  static const int endHour = 29;
 
   final DateTime date;
 
@@ -24,7 +24,7 @@ class _HourGridState extends State<HourGrid> {
     double offset = 0;
     final now = DateTime.now();
     if (isSameDay(widget.date, now)) {
-      final rowsFromTop = now.hour - HourGrid.startHour;
+      final rowsFromTop = (now.hour - HourGrid.startHour) % 24;
       if (rowsFromTop > 0) {
         offset = rowsFromTop * HourGrid.hourHeight;
       }
@@ -61,7 +61,7 @@ class _HourGridState extends State<HourGrid> {
                 child: Padding(
                   padding: EdgeInsets.only(left: 8, top: 4),
                   child: Text(
-                    hourlabel(hour),
+                    hourlabel(hour % 24),
                     style: TextStyle(fontSize: 12, color: Colors.black54),
                   ),
                 ),
