@@ -6,5 +6,7 @@ from .models import User
 @transaction.atomic
 def register_user(email, password, name="") -> User:
     user = User.objects.create_user(email=email, password=password, name=name)
-    # TODO(common): seed default categories here once the common app exists
+    from apps.common.services import seed_default_categories
+
+    seed_default_categories(user)
     return user
