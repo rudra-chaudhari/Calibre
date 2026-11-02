@@ -23,9 +23,11 @@ INSTALLED_APPS = [
     "rest_framework",
     "rest_framework_simplejwt.token_blacklist",
     "drf_spectacular",
+    "django_filters",
     # local
     "apps.accounts",
     "apps.common",
+    "apps.tasks",
 ]
 
 MIDDLEWARE = [
