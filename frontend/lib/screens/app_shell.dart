@@ -1,7 +1,9 @@
-import 'package:flutter/material.dart';
 import 'package:calibre/screens/day_screen.dart';
 import 'package:calibre/screens/week_screen.dart';
+import 'package:calibre/utils/date_utils.dart';
+import 'package:calibre/widgets/side_menu.dart';
 import 'package:calibre/widgets/top_bar.dart';
+import 'package:flutter/material.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({super.key});
@@ -11,10 +13,8 @@ class AppShell extends StatefulWidget {
 }
 
 class _AppShellState extends State<AppShell> {
-  static const double _menuWidth = 280;
-
+  final DateTime _selectedDate = dateOnly(DateTime.now());
   int _viewIndex = 0;
-  final DateTime _selectedDate = DateTime.now();
 
   @override
   Widget build(BuildContext context) {
@@ -26,23 +26,15 @@ class _AppShellState extends State<AppShell> {
     return Scaffold(
       backgroundColor: const Color(0xFFFDF0D5),
       body: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Container(
-            width: _menuWidth,
-            color: const Color(0xFFF5E3BD),
-          ),
+          const SideMenu(),
           Expanded(
             child: Column(
               children: [
                 TopBar(
                   date: _selectedDate,
                   index: _viewIndex,
-                  onChanged: (i) {
-                    setState(() {
-                      _viewIndex = i;
-                    });
-                  },
+                  onChanged: (i) => setState(() => _viewIndex = i),
                 ),
                 Expanded(child: pages[_viewIndex]),
               ],

@@ -44,21 +44,28 @@ class AuthService {
     return User.fromJson(_decode(response));
   }
 
+  Future<void> refresh() async {
+    final refreshToken = await _tokens.readRefresh();
+    if (refreshToken == null) {
+      throw ApiException('Not signed in', 401);
+    }
+    final data = await _post('/auth/token/refresh/', {'refresh': refreshToken});
+    await _tokens.saveTokens(data['access'], data['refresh']);
+  }
+
   Future<void> logout() async {
     final access = await _tokens.readAccess();
-    final refresh = await _tokens.readRefresh();
-    if (refresh != null) {
+    final refreshToken = await _tokens.readRefresh();
+    if (refreshToken != null) {
       try {
         await _send(
           () => http.post(
             Uri.parse('$baseUrl/auth/logout/'),
             headers: _headers(access),
-            body: jsonEncode({'refresh': refresh}),
+            body: jsonEncode({'refresh': refreshToken}),
           ),
         );
-      } on ApiException {
-        
-      }
+      } on ApiException {}
     }
     await _tokens.clear();
   }
