@@ -6,8 +6,9 @@ class TokenStorage {
   static const String _accessKey = 'access_token';
   static const String _refreshKey = 'refresh_token';
 
-  final FlutterSecureStorage _storage = FlutterSecureStorage();
-
+  final FlutterSecureStorage _storage = FlutterSecureStorage(
+    mOptions: MacOsOptions(usesDataProtectionKeychain: false),
+  );
 
   Future<void> saveTokens(String access, String refresh) async {
     await _storage.write(key: _accessKey, value: access);
