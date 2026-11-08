@@ -2,7 +2,9 @@ import 'package:calibre/state/auth_state.dart';
 import 'package:flutter/material.dart';
 
 class SideMenu extends StatelessWidget {
-  const SideMenu({super.key});
+  final VoidCallback onNewEvent;
+
+  const SideMenu({super.key, required this.onNewEvent});
 
   @override
   Widget build(BuildContext context) {
@@ -18,7 +20,17 @@ class SideMenu extends StatelessWidget {
       color: const Color(0xFFF5E3BD),
       padding: const EdgeInsets.all(12),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          FilledButton.icon(
+            onPressed: onNewEvent,
+            icon: const Icon(Icons.add),
+            label: const Text('New event'),
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFF26D4A),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+          ),
           const Expanded(child: SizedBox()),
           PopupMenuButton<String>(
             tooltip: '',

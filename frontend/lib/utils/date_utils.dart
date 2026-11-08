@@ -65,3 +65,11 @@ DateTime startofweek(DateTime d){
 
   return addDays(d, startDays);
 }
+
+String timelabel(int minutes) {
+  final h = minutes ~/ 60;
+  final m = minutes % 60;
+  final h12 = h % 12 == 0 ? 12 : h % 12;
+  final suffix = (h % 24) < 12 ? 'AM' : 'PM';
+  return '$h12:${m.toString().padLeft(2, '0')} $suffix';
+} 
