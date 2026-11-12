@@ -2,4 +2,5 @@ from django.apps import AppConfig
 
 
 class PlannerConfig(AppConfig):
-    name = 'apps.planner'
+    name = "apps.planner"
+    label = "planner"
