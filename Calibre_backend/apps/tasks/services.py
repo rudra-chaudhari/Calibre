@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo
 
 from django.utils import timezone as tz
 
+from apps.common.timeutils import local_day_window, local_today
 from .models import Task
 
 URGENT_WITHIN = timedelta(hours=48)
@@ -62,18 +63,12 @@ def reopen_task(task):
 def today_range(user, now=None):
     """
     Returns (start, end) as UTC datetimes covering the user's local calendar day.
-    Takes the local date of 'now', builds local midnight and next local midnight,
-    then converts both to UTC.
+    Delegates to common.timeutils.local_day_window for the conversion.
     """
     if now is None:
         now = tz.now()
-    zone = ZoneInfo(user.timezone)
-    local_now = now.astimezone(zone)
-    local_midnight = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
-    local_next_midnight = (local_midnight + timedelta(days=1))
-    start = local_midnight.astimezone(tz.UTC)
-    end = local_next_midnight.astimezone(tz.UTC)
-    return start, end
+    day = local_today(user.timezone, now)
+    return local_day_window(user.timezone, day)
 
 
 def tasks_due_today(user, now=None):

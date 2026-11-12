@@ -28,6 +28,7 @@ INSTALLED_APPS = [
     "apps.accounts",
     "apps.common",
     "apps.tasks",
+    "apps.planner",
 ]
 
 MIDDLEWARE = [
