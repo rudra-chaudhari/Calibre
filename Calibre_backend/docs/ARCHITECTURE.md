@@ -21,7 +21,7 @@ The backend is organized into multiple apps, each handling a specific domain. Ap
 | 9 | `analytics` | Read-only summary stats | accounts, tasks, events, focus |
 | 10 | `activity` | Screen-time ingestion | accounts |
 
-The `accounts`, `common`, `tasks`, and `planner` apps are implemented in this phase.
+The `accounts`, `common`, `tasks`, `planner`, and `integrations` apps are implemented in this phase.
 
 ## Layering
 
@@ -204,13 +204,15 @@ graph LR
     accounts["accounts"] <-- common["common"]
     common <-- tasks["tasks"]
     tasks <-- planner["planner"]
+    planner <-- integrations["integrations"]
 ```
 
-**Rule**: Lower apps never import higher apps (`accounts ← common ← tasks ← planner`).
+**Rule**: Lower apps never import higher apps (`accounts ← common ← tasks ← planner ← integrations`).
 - `accounts` knows nothing of any other app.
 - `common` only imports from `accounts` (e.g. `User`).
-- `tasks` imports from `common` and `accounts`, never from `planner`.
-- `planner` may import from `tasks` (e.g. `Task`, `priority_rank`), `common`, and `accounts`.
+- `tasks` imports from `common` and `accounts`, never from `planner` or `integrations`.
+- `planner` may import from `tasks` (e.g. `Task`, `priority_rank`), `common`, and `accounts`, never from `integrations`.
+- `integrations` may import from `tasks`, `planner`, `common`, and `accounts`.
 This one-way dependency chain prevents circular dependencies and keeps testing and architectural reasoning straightforward.
 
 ## Stored vs Generated Data
@@ -375,9 +377,155 @@ erDiagram
     Category ||--o{ Event : categorizes
     Category ||--o{ Routine : categorizes
     Task ||--o{ Event : blocks
+
+    MoodleConnection {
+        int id PK
+        int user FK
+        int moodle_userid
+        string token_encrypted
+        string status
+        datetime last_synced_at
+        string last_error
+        datetime created_at
+        datetime updated_at
+    }
+
+    User ||--o| MoodleConnection : has
 ```
 
-**Current state**: The `User`, `Category`, `Task`, `Event`, `Routine`, and `RoutineCheckin` tables exist. Other tables will be added as apps are implemented in the build order.
+**Current state**: The `User`, `Category`, `Task`, `Event`, `Routine`, `RoutineCheckin`, and `MoodleConnection` tables exist. Other tables will be added as apps are implemented in the build order.
+
+## Module Responsibilities (Integrations)
+
+The `integrations` app is split into focused modules for testability and separation of concerns:
+
+- **`exceptions.py`**: Defines Moodle error hierarchy (`MoodleError`, `MoodleTokenError`, `MoodleAPIError`, `MoodleUnavailable`) and `MoodleReauthRequired` (DRF APIException for 409 responses).
+- **`crypto.py`**: Token encryption/decryption using Fernet. Keeps tokens secure at rest.
+- **`moodle_client.py`**: The ONLY module that makes HTTP calls to Moodle. Isolates network logic and handles Moodle's specific API format.
+- **`mapping.py`**: Pure functions that transform raw Moodle event JSON into Calibre dicts. No DB, no HTTP, trivially testable.
+- **`services.py`**: Orchestrates the sync flow: decrypt token → fetch from Moodle → map → write to DB in one transaction. Handles field ownership rules.
+- **`views.py`**: Thin API views that call services and map errors to HTTP status codes.
+
+This split makes testing easy: `mapping` can be tested with pure data, `moodle_client` can be mocked at the `requests` level, and `services` can be tested with mocked client calls.
+
+## Moodle Sync Data Flow
+
+### POST /moodle/sync/ (Happy Path)
+
+1. Client sends `POST /api/v1/moodle/sync/` with access token
+2. `urls.py` routes to `sync_view`
+3. JWT auth validates and sets `request.user`
+4. `sync_view` calls `services.sync(user)`
+5. `sync()` loads the user's `MoodleConnection`
+6. Decrypts the token using `crypto.decrypt_token()`
+7. Computes `sync_window()` to determine which months to fetch
+8. Calls `moodle_client.fetch_events(token, months)` to get all raw events
+9. `mapping.normalize_event()` transforms each raw event into a Calibre dict (skips invalid ones)
+10. Splits into task items (`eventtype == "due"`) and event items
+11. In one `transaction.atomic()` block:
+    - Loads existing Moodle-sourced tasks and events
+    - Creates new items, updates changed ones (only Moodle-owned fields), deletes removed ones
+    - Field ownership: Moodle owns `title` and time fields; user owns everything else
+12. Sets `last_synced_at`, clears `last_error`, sets status to `active`
+13. Returns summary counts
+14. Response: 200 with summary
+
+**Key rule**: Fetch everything from Moodle first, then write in one transaction. If the fetch fails, nothing is written (no partial import).
+
+## Field Ownership (Moodle Sync)
+
+Moodle sync respects user modifications by only updating Moodle-owned fields:
+
+| Field | Owner | Sync Behavior |
+|-------|-------|---------------|
+| `title` | Moodle | Updated on sync |
+| `due_at` / `start_at` / `end_at` | Moodle | Updated on sync |
+| `status` | User | Never changed (tasks stay done) |
+| `category` | User | Never changed |
+| `notes` | User | Never changed |
+| `is_important`, `estimate_min` | User | Never changed |
+| `completed_at` | User | Never changed |
+
+**Why**: Users may mark Moodle tasks as done, change categories, add estimates, or edit notes. Sync should not overwrite these user decisions. Only the core data (title and timing) comes from Moodle.
+
+## Token Security
+
+- **Encryption at rest**: Moodle tokens are encrypted with Fernet using `MOODLE_TOKEN_KEY` before storage.
+- **Never returned**: The token is never included in any API response or admin display.
+- **Never logged**: Token values are never written to logs (only counts and status).
+- **Fixed base URL**: The Moodle URL comes only from settings (`MOODLE_BASE_URL`), preventing the server from being used to call arbitrary hosts.
+- **Throttling**: Sync is throttled to 10 requests per hour per user to be polite to the university server.
+
+## Connection Lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> not_connected: Connect
+    not_connected --> active: Token validated
+    active --> expired: Token expired (detected on sync)
+    expired --> active: Reconnect
+    active --> not_connected: Disconnect
+    not_connected --> not_connected: Disconnect (idempotent)
+```
+
+## Request Flow (Integrations)
+
+### (j) POST /moodle/connect/
+
+1. Client sends `POST /api/v1/moodle/connect/` with `{"token": "..."}`
+2. `urls.py` routes to `connect_view`
+3. JWT auth validates and sets `request.user`
+4. `ConnectSerializer` validates token format
+5. `connect_view` calls `services.connect(user, token)`
+6. `parse_launch_token()` extracts the actual token from the launch string
+7. `get_site_info(token)` calls Moodle to validate the token
+8. `encrypt_token()` encrypts the token
+9. `update_or_create()` creates or updates `MoodleConnection` with `moodle_userid`, encrypted token, status="active"
+10. Response: 201 (created) or 200 (updated) with connection status (token never returned)
+
+**Files touched (in order)**:
+- `apps/integrations/urls.py` (route)
+- `apps/integrations/views.py` (connect_view)
+- `apps/integrations/serializers.py` (ConnectSerializer)
+- `apps/integrations/services.py` (connect)
+- `apps/integrations/moodle_client.py` (parse_launch_token, get_site_info)
+- `apps/integrations/crypto.py` (encrypt_token)
+- `apps/integrations/models.py` (MoodleConnection)
+- DB (integrations_moodleconnection table)
+
+### (k) POST /moodle/sync/ (Token Expired)
+
+1. Client sends `POST /api/v1/moodle/sync/` with access token
+2. `urls.py` routes to `sync_view`
+3. JWT auth validates and sets `request.user`
+4. `sync_view` calls `services.sync(user)`
+5. `sync()` loads connection, sees `status == "expired"`
+6. Raises `MoodleReauthRequired` without calling Moodle
+7. DRF converts to 409 response with `{"code": "moodle_reauth_required", "detail": "..."}`
+
+**Files touched (in order)**:
+- `apps/integrations/urls.py` (route)
+- `apps/integrations/views.py` (sync_view)
+- `apps/integrations/services.py` (sync)
+- `apps/integrations/exceptions.py` (MoodleReauthRequired)
+
+### (l) DELETE /moodle/?delete_imported=true
+
+1. Client sends `DELETE /api/v1/moodle/?delete_imported=true` with access token
+2. `urls.py` routes to `disconnect_view`
+3. JWT auth validates and sets `request.user`
+4. `disconnect_view` calls `services.disconnect(user, delete_imported=True)`
+5. `disconnect()` deletes the `MoodleConnection` row
+6. `_delete_imported()` deletes all Moodle-sourced events and todo tasks (keeps done tasks)
+7. Response: 204 No Content
+
+**Files touched (in order)**:
+- `apps/integrations/urls.py` (route)
+- `apps/integrations/views.py` (disconnect_view)
+- `apps/integrations/services.py` (disconnect, _delete_imported)
+- `apps/tasks/models.py` (Task - implicit via query)
+- `apps/planner/models.py` (Event - implicit via query)
+- DB (integrations_moodleconnection, tasks_task, planner_event tables)
 
 ## Request Flow (Planner)
 

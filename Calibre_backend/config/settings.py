@@ -29,6 +29,7 @@ INSTALLED_APPS = [
     "apps.common",
     "apps.tasks",
     "apps.planner",
+    "apps.integrations",
 ]
 
 MIDDLEWARE = [
@@ -96,6 +97,7 @@ REST_FRAMEWORK = {
         "anon": "60/min",
         "user": "600/min",
         "auth": "10/min",
+        "moodle_sync": "10/hour",
     },
 }
 
@@ -105,6 +107,13 @@ SIMPLE_JWT = {
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
 }
+
+# Moodle integration settings
+MOODLE_BASE_URL = env("MOODLE_BASE_URL", default="https://moodle.iitb.ac.in")
+MOODLE_TIMEOUT_SECONDS = env.int("MOODLE_TIMEOUT_SECONDS", default=20)
+MOODLE_SYNC_MONTHS_BACK = env.int("MOODLE_SYNC_MONTHS_BACK", default=1)
+MOODLE_SYNC_MONTHS_FORWARD = env.int("MOODLE_SYNC_MONTHS_FORWARD", default=6)
+MOODLE_TOKEN_KEY = env("MOODLE_TOKEN_KEY", default=None)
 
 SPECTACULAR_SETTINGS = {
     "TITLE": "Calibre API",
