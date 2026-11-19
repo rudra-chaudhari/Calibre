@@ -2,4 +2,5 @@ from django.apps import AppConfig
 
 
 class FocusConfig(AppConfig):
-    name = 'apps.focus'
+    default_auto_field = "django.db.models.BigAutoField"
+    name = "apps.focus"
