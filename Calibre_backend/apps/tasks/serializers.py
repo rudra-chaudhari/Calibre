@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from drf_spectacular.utils import extend_schema_field
 
 from apps.common.models import Category
 from .models import Task
@@ -41,9 +42,11 @@ class TaskSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
 
+    @extend_schema_field(serializers.BooleanField())
     def get_is_overdue(self, obj):
         return is_overdue(obj)
 
+    @extend_schema_field(serializers.BooleanField())
     def get_is_urgent(self, obj):
         return is_urgent(obj)
 
