@@ -30,6 +30,7 @@ INSTALLED_APPS = [
     "apps.tasks",
     "apps.planner",
     "apps.integrations",
+    "apps.focus",
 ]
 
 MIDDLEWARE = [
@@ -119,4 +120,5 @@ SPECTACULAR_SETTINGS = {
     "TITLE": "Calibre API",
     "DESCRIPTION": "Backend API for Calibre: Own your Time.",
     "VERSION": "0.1.0",
+    "SERVERS": [{"url": "http://localhost:8000", "description": "Local server"}],
 }
