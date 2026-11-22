@@ -1,11 +1,12 @@
 from django.urls import path
 from rest_framework.routers import SimpleRouter
 
-from .views import EventViewSet, RoutineViewSet, agenda_view, free_slots_view
+from .views import EventViewSet, RoutineViewSet, agenda_view, free_slots_view, ExternalEventViewSet
 
 router = SimpleRouter()
 router.register("events", EventViewSet, basename="event")
 router.register("routines", RoutineViewSet, basename="routine")
+router.register("external-events", ExternalEventViewSet, basename="externalevent")
 
 urlpatterns = [
     path("calendar/agenda/", agenda_view, name="agenda"),

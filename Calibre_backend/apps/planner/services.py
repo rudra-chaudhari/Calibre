@@ -150,6 +150,9 @@ def agenda(user, start_date, end_date):
                 "task": event.task_id,
                 "location": event.location,
             },
+            "source": event.source,
+            "external_id": event.external_id if event.external_id else None,
+            "series_id": str(event.series_id) if event.series_id else None,
         }
         for event in events
     ]

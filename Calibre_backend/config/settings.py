@@ -24,6 +24,7 @@ INSTALLED_APPS = [
     "rest_framework_simplejwt.token_blacklist",
     "drf_spectacular",
     "django_filters",
+    "corsheaders",
     # local
     "apps.accounts",
     "apps.common",
@@ -36,6 +37,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
@@ -100,6 +102,8 @@ REST_FRAMEWORK = {
         "auth": "10/min",
         "moodle_sync": "10/hour",
     },
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 20,
 }
 
 SIMPLE_JWT = {
@@ -115,6 +119,24 @@ MOODLE_TIMEOUT_SECONDS = env.int("MOODLE_TIMEOUT_SECONDS", default=20)
 MOODLE_SYNC_MONTHS_BACK = env.int("MOODLE_SYNC_MONTHS_BACK", default=1)
 MOODLE_SYNC_MONTHS_FORWARD = env.int("MOODLE_SYNC_MONTHS_FORWARD", default=6)
 MOODLE_TOKEN_KEY = env("MOODLE_TOKEN_KEY", default=None)
+
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:*",
+    "http://127.0.0.1:*",
+]
+
+CORS_ALLOW_HEADERS = [
+    "content-type",
+    "authorization",
+]
+
+CORS_ALLOW_METHODS = [
+    "GET",
+    "POST",
+    "PATCH",
+    "DELETE",
+    "OPTIONS",
+]
 
 SPECTACULAR_SETTINGS = {
     "TITLE": "Calibre API",

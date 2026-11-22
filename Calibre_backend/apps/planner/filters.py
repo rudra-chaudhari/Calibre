@@ -10,6 +10,8 @@ class EventFilter(filters.FilterSet):
     kind = filters.CharFilter(field_name="kind")
     category = filters.NumberFilter(field_name="category__id")
     source = filters.CharFilter(field_name="source")
+    external_id = filters.CharFilter(field_name="external_id")
+    series_id = filters.CharFilter(field_name="series_id")
 
     def filter_start_date(self, queryset, name, value):
         if not value:
@@ -38,4 +40,4 @@ class EventFilter(filters.FilterSet):
 
     class Meta:
         model = Event
-        fields = ["kind", "category", "source", "start_date", "end_date"]
+        fields = ["kind", "category", "source", "external_id", "start_date", "end_date"]

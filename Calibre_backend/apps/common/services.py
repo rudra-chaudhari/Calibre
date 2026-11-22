@@ -4,14 +4,8 @@ from .models import Category
 
 
 DEFAULT_CATEGORIES = [
-    {"name": "Academics", "color": "#3B82F6", "sort_order": 0},
-    {"name": "Work", "color": "#8B5CF6", "sort_order": 1},
-    {"name": "Personal", "color": "#EC4899", "sort_order": 2},
-    {"name": "Health & Fitness", "color": "#10B981", "sort_order": 3},
-    {"name": "Social", "color": "#F59E0B", "sort_order": 4},
-    {"name": "Finance", "color": "#14B8A6", "sort_order": 5},
-    {"name": "Chores", "color": "#6B7280", "sort_order": 6},
-    {"name": "Leisure", "color": "#EF4444", "sort_order": 7},
+    {"name": "Personal", "color": "#EC4899", "sort_order": 0},
+    {"name": "Academics", "color": "#3B82F6", "sort_order": 1},
 ]
 
 

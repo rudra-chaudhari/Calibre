@@ -1,13 +1,13 @@
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 
 from django.db import transaction
 from django.utils import timezone as tz
 from django.core.exceptions import ValidationError as DjangoValidationError
 
-from apps.common.timeutils import local_day_window, local_today
+from apps.common.timeutils import local_day_window, local_today, local_to_utc
 from apps.common.models import Category
 from apps.tasks.models import Task
-from apps.planner.models import Event
+from apps.planner.models import Event, CourseSchedule, DeletedEvent
 
 from .crypto import decrypt_token, encrypt_token
 from .exceptions import MoodleReauthRequired, MoodleTokenError
@@ -257,9 +257,13 @@ def sync(user, now=None):
     connection.status = MoodleConnection.Status.ACTIVE
     connection.save()
 
+    # Step 9: Sync course events
+    course_summary = sync_course_events(user, now)
+
     return {
         "tasks": {"created": tasks_created, "updated": tasks_updated, "deleted": tasks_deleted},
         "events": {"created": events_created, "updated": events_updated, "deleted": events_deleted},
+        "course_events": course_summary.get("course_events", {"created": 0, "updated": 0, "deleted": 0}),
         "synced_at": now.isoformat(),
         "window": {"start": window_start.isoformat(), "end": window_end.isoformat()},
     }
@@ -322,4 +326,148 @@ def status_info(user):
         "last_synced_at": connection.last_synced_at.isoformat() if connection.last_synced_at else None,
         "last_error": connection.last_error,
         "imported": {"tasks": imported_tasks, "events": imported_events},
+    }
+
+
+def sync_course_events(user, now=None):
+    """
+    Sync course schedule events for a user.
+    Steps:
+    1. Fetch user's enrolled courses from Moodle.
+    2. Match course codes to CourseSchedule table.
+    3. Generate events for each class meeting from semester start to end.
+    4. Skip deleted occurrences (from DeletedEvent table).
+    5. Create/update events with source=course.
+    6. Delete future events for dropped courses.
+    """
+    if now is None:
+        now = tz.now()
+
+    try:
+        connection = user.moodle_connection
+    except MoodleConnection.DoesNotExist:
+        # No Moodle connection, skip course sync
+        return {"course_events": {"created": 0, "updated": 0, "deleted": 0}}
+
+    if connection.status == MoodleConnection.Status.EXPIRED:
+        return {"course_events": {"created": 0, "updated": 0, "deleted": 0}}
+
+    try:
+        token = decrypt_token(connection.token_encrypted)
+    except Exception:
+        return {"course_events": {"created": 0, "updated": 0, "deleted": 0}}
+
+    # Fetch enrolled courses from Moodle
+    try:
+        from .moodle_client import fetch_enrolled_courses
+        enrolled_courses = fetch_enrolled_courses(token)
+    except Exception:
+        # If we can't fetch courses, skip sync
+        return {"course_events": {"created": 0, "updated": 0, "deleted": 0}}
+
+    # Extract course codes
+    enrolled_codes = {course.get("shortname", "") for course in enrolled_courses if course.get("shortname")}
+
+    with transaction.atomic():
+        # Load Academics category
+        academics = Category.objects.filter(user=user, name__iexact="Academics").first()
+
+        # Load deleted events to skip
+        deleted_external_ids = set(
+            DeletedEvent.objects.filter(
+                user=user, source=Event.Source.COURSE
+            ).values_list("external_id", flat=True)
+        )
+
+        # Load existing course events
+        existing_course_events = {
+            (e.external_id, e.start_at.date()): e
+            for e in Event.objects.filter(
+                user=user, source=Event.Source.COURSE
+            ).select_related("category")
+        }
+
+        # Load active schedules for enrolled courses
+        schedules = CourseSchedule.objects.filter(
+            course_code__in=enrolled_codes, is_active=True
+        )
+
+        created = 0
+        updated = 0
+        created_external_ids = set()
+
+        # Generate events for each schedule
+        for schedule in schedules:
+            current_date = schedule.semester_start
+            while current_date <= schedule.semester_end:
+                # Check if this weekday is scheduled
+                if current_date.weekday() in schedule.weekdays:
+                    # Build external_id: course_code + slot + date
+                    external_id = f"{schedule.course_code}_{schedule.slot}_{current_date.isoformat()}"
+
+                    # Skip if user deleted this occurrence
+                    if external_id in deleted_external_ids:
+                        current_date += timedelta(days=1)
+                        continue
+
+                    # Convert local time to UTC
+                    start_at = local_to_utc(user.timezone, current_date, schedule.start_time)
+                    end_at = local_to_utc(user.timezone, current_date, schedule.end_time)
+
+                    # Check if event already exists
+                    event_key = (external_id, current_date)
+                    if event_key in existing_course_events:
+                        event = existing_course_events[event_key]
+                        # Update Moodle-owned fields
+                        if (
+                            event.title != f"{schedule.course_code}: {schedule.course_name}"
+                            or event.location != schedule.venue
+                            or event.start_at != start_at
+                            or event.end_at != end_at
+                        ):
+                            event.title = f"{schedule.course_code}: {schedule.course_name}"
+                            event.location = schedule.venue
+                            event.start_at = start_at
+                            event.end_at = end_at
+                            event.save()
+                            updated += 1
+                    else:
+                        # Create new event
+                        Event.objects.create(
+                            user=user,
+                            title=f"{schedule.course_code}: {schedule.course_name}",
+                            location=schedule.venue,
+                            category=academics,
+                            kind=Event.Kind.EVENT,
+                            start_at=start_at,
+                            end_at=end_at,
+                            source=Event.Source.COURSE,
+                            external_id=external_id,
+                        )
+                        created += 1
+
+                    created_external_ids.add(external_id)
+
+                current_date += timedelta(days=1)
+
+        # Delete future events for dropped courses
+        future_cutoff = now.date()
+        dropped_event_ids = []
+        for (external_id, event_date), event in existing_course_events.items():
+            # Extract course code from external_id (format: CODE_slot_YYYY-MM-DD)
+            parts = external_id.split("_")
+            if len(parts) >= 3:
+                course_code = parts[0]
+                if course_code not in enrolled_codes and event_date >= future_cutoff:
+                    dropped_event_ids.append(event.id)
+
+        if dropped_event_ids:
+            Event.objects.filter(id__in=dropped_event_ids).delete()
+
+    return {
+        "course_events": {
+            "created": created,
+            "updated": updated,
+            "deleted": len(dropped_event_ids),
+        }
     }

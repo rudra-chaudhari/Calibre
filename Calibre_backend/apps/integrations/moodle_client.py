@@ -145,3 +145,12 @@ def fetch_events(token, months):
                 all_events.append(event)
 
     return all_events
+
+
+def fetch_enrolled_courses(token) -> list:
+    """
+    Fetches the user's enrolled courses from Moodle.
+    Returns a list of course objects with id, shortname, fullname.
+    """
+    data = call(token, "core_enrol_get_users_courses", userid=0)
+    return data if isinstance(data, list) else []

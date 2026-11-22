@@ -17,5 +17,6 @@ class StatusSerializer(serializers.Serializer):
 class SyncSummarySerializer(serializers.Serializer):
     tasks = serializers.DictField()
     events = serializers.DictField()
+    course_events = serializers.DictField(required=False)
     synced_at = serializers.DateTimeField()
     window = serializers.DictField()

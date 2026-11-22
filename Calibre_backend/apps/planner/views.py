@@ -4,16 +4,20 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.exceptions import NotFound
 
 from apps.common.mixins import OwnedQuerysetMixin
 from apps.common.timeutils import local_today, local_to_utc
 from .filters import EventFilter
-from .models import Event, Routine
+from .models import Event, Routine, ExternalEvent
+from .pagination import LargePageNumberPagination
 from .serializers import (
     AgendaItemSerializer,
     AgendaQuerySerializer,
     CheckinSerializer,
     EventSerializer,
+    ExternalEventSerializer,
+    ExternalEventQuerySerializer,
     FreeSlotsQuerySerializer,
     RoutineSerializer,
 )
@@ -30,14 +34,204 @@ class EventViewSet(OwnedQuerysetMixin, viewsets.ModelViewSet):
     """
     ViewSet for managing user events and time blocks.
     Allows GET, POST, PATCH, DELETE (PUT is disabled).
-    Supports filtering by kind, category, source, and date range.
+    Supports filtering by kind, category, source, external_id, and date range.
+    Uses larger pagination (up to 200) for repeated events.
+    Supports repeat rule for creating recurring events.
+    Supports scope parameter for PATCH/DELETE on series.
     """
     queryset = Event.objects.select_related("category", "task").all()
     serializer_class = EventSerializer
     filter_backends = [DjangoFilterBackend]
     filterset_class = EventFilter
+    pagination_class = LargePageNumberPagination
 
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+
+    def create(self, request, *args, **kwargs):
+        """
+        Handle repeat rule for creating recurring events.
+        Without repeat: single event (existing behavior).
+        With repeat: create series of events in one transaction.
+        """
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        repeat_rule = serializer.validated_data.pop("repeat", None)
+        
+        if not repeat_rule:
+            # Single event creation (existing behavior)
+            return super().create(request, *args, **kwargs)
+        
+        # Handle repeat rule
+        import uuid
+        from datetime import datetime, timedelta
+        from django.db import transaction
+        from zoneinfo import ZoneInfo
+        
+        freq = repeat_rule["freq"]
+        weekdays = repeat_rule.get("weekdays", [])
+        until = datetime.strptime(repeat_rule["until"], "%Y-%m-%d").date()
+        
+        start_at = serializer.validated_data["start_at"]
+        end_at = serializer.validated_data["end_at"]
+        duration = end_at - start_at
+        remind_at = serializer.validated_data.get("remind_at")
+        
+        series_id = uuid.uuid4()
+        occurrences = []
+        
+        # Validate weekday for weekly
+        if freq == "weekly":
+            if start_at.weekday() not in weekdays:
+                return Response(
+                    {"repeat": {"weekdays": "start_at weekday must be in weekdays list"}},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        
+        # Generate occurrences
+        current = start_at
+        while current.date() <= until:
+            if freq == "daily" or (freq == "weekly" and current.weekday() in weekdays):
+                occ_end = current + duration
+                occ_remind = remind_at + (current - start_at) if remind_at else None
+                
+                occ = Event(
+                    user=request.user,
+                    title=serializer.validated_data["title"],
+                    notes=serializer.validated_data.get("notes", ""),
+                    location=serializer.validated_data.get("location", ""),
+                    category=serializer.validated_data.get("category"),
+                    kind=serializer.validated_data.get("kind", Event.Kind.EVENT),
+                    task=serializer.validated_data.get("task"),
+                    start_at=current,
+                    end_at=occ_end,
+                    remind_at=occ_remind,
+                    source=Event.Source.MANUAL,
+                    series_id=series_id,
+                )
+                occurrences.append(occ)
+            
+            current += timedelta(days=1)
+        
+        # Create all occurrences in one transaction
+        with transaction.atomic():
+            Event.objects.bulk_create(occurrences)
+        
+        # Return first event with series info
+        first_event = occurrences[0]
+        first_event.refresh_from_db()
+        serializer = self.get_serializer(first_event)
+        
+        return Response(
+            {
+                "series_id": str(series_id),
+                "count": len(occurrences),
+                "first": serializer.data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    def update(self, request, *args, **kwargs):
+        """
+        Handle scope parameter for updating series.
+        scope=this: update only this event (default)
+        scope=following: update this and all later events in series
+        scope=all: update all events in series
+        """
+        scope = request.query_params.get("scope", "this")
+        event = self.get_object()
+        
+        if not event.series_id or scope == "this":
+            # Single event update (existing behavior)
+            return super().update(request, *args, **kwargs)
+        
+        if scope not in ("following", "all"):
+            return Response(
+                {"scope": "Invalid scope. Must be 'this', 'following', or 'all'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        # Prevent date changes with scope
+        if "start_at" in request.data or "end_at" in request.data:
+            return Response(
+                {"detail": "Cannot change dates with scope=following or scope=all."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        # Get all events in scope
+        if scope == "all":
+            events_to_update = Event.objects.filter(
+                user=request.user, series_id=event.series_id
+            )
+        else:  # following
+            events_to_update = Event.objects.filter(
+                user=request.user, series_id=event.series_id, start_at__gte=event.start_at
+            )
+        
+        # Apply changes to all events in scope
+        serializer = self.get_serializer(event, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        
+        # Only update safe fields
+        allowed_fields = ["title", "notes", "location", "category", "kind", "task"]
+        update_data = {k: v for k, v in serializer.validated_data.items() if k in allowed_fields}
+        
+        events_to_update.update(**update_data)
+        
+        # Return updated first event
+        event.refresh_from_db()
+        serializer = self.get_serializer(event)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def destroy(self, request, *args, **kwargs):
+        """
+        Handle scope parameter for deleting series.
+        scope=this: delete only this event (default)
+        scope=following: delete this and all later events in series
+        scope=all: delete all events in series
+        """
+        scope = request.query_params.get("scope", "this")
+        event = self.get_object()
+        
+        if not event.series_id or scope == "this":
+            # Single event delete (existing behavior)
+            # Track deletion for course events
+            if event.source == Event.Source.COURSE and event.external_id:
+                from .models import DeletedEvent
+                DeletedEvent.objects.get_or_create(
+                    user=request.user,
+                    source=event.source,
+                    external_id=event.external_id,
+                )
+            return super().destroy(request, *args, **kwargs)
+        
+        if scope not in ("following", "all"):
+            return Response(
+                {"scope": "Invalid scope. Must be 'this', 'following', or 'all'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        # Delete events in scope
+        if scope == "all":
+            events_to_delete = Event.objects.filter(user=request.user, series_id=event.series_id)
+        else:  # following
+            events_to_delete = Event.objects.filter(
+                user=request.user, series_id=event.series_id, start_at__gte=event.start_at
+            )
+        
+        # Track deletions for course events
+        from .models import DeletedEvent
+        for e in events_to_delete:
+            if e.source == Event.Source.COURSE and e.external_id:
+                DeletedEvent.objects.get_or_create(
+                    user=request.user,
+                    source=e.source,
+                    external_id=e.external_id,
+                )
+        
+        events_to_delete.delete()
+        
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class RoutineViewSet(OwnedQuerysetMixin, viewsets.ModelViewSet):
@@ -138,6 +332,99 @@ def agenda_view(request):
         query_serializer.validated_data["end_date"],
     )
     return Response(result, status=status.HTTP_200_OK)
+
+
+class ExternalEventViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    ViewSet for reading shared external events from CSE/Institute feeds.
+    GET /external-events/ - list with source and date range filtering
+    POST /external-events/{id}/add/ - add to user's own events
+    """
+    queryset = ExternalEvent.objects.filter(removed_at__isnull=True)
+    serializer_class = ExternalEventSerializer
+    pagination_class = LargePageNumberPagination
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        source = self.request.query_params.get("source")
+        if source:
+            queryset = queryset.filter(source=source)
+        
+        # Date range filtering (same overlap rules as events)
+        from apps.common.timeutils import local_day_window
+        from datetime import datetime, timedelta
+        start_date = self.request.query_params.get("start_date")
+        end_date = self.request.query_params.get("end_date")
+        
+        if start_date:
+            try:
+                start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
+                start_utc, _ = local_day_window(self.request.user.timezone, start_dt)
+                queryset = queryset.filter(end_at__gt=start_utc)
+            except ValueError:
+                pass
+        
+        if end_date:
+            try:
+                end_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
+                next_day = end_dt + timedelta(days=1)
+                _, end_utc = local_day_window(self.request.user.timezone, next_day)
+                queryset = queryset.filter(start_at__lt=end_utc)
+            except ValueError:
+                pass
+        
+        return queryset
+
+    def list(self, request, *args, **kwargs):
+        """Validate query parameters before listing."""
+        query_serializer = ExternalEventQuerySerializer(data=request.query_params)
+        query_serializer.is_valid(raise_exception=True)
+        return super().list(request, *args, **kwargs)
+
+    @extend_schema(responses={201: EventSerializer, 200: EventSerializer})
+    @action(detail=True, methods=["post"])
+    def add(self, request, pk=None):
+        """
+        POST /external-events/{id}/add/
+        Creates a user event from an external event.
+        Returns 201 if new, 200 if already added.
+        """
+        external_event = self.get_object()
+        
+        # Check if user already has this event
+        existing = Event.objects.filter(
+            user=request.user,
+            source=external_event.source,
+            external_id=external_event.external_id,
+        ).first()
+        
+        if existing:
+            serializer = EventSerializer(existing)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        
+        # Get user's Personal category
+        from apps.common.models import Category
+        personal = Category.objects.filter(
+            user=request.user, name__iexact="Personal"
+        ).first()
+        
+        # Create new event
+        event = Event.objects.create(
+            user=request.user,
+            title=external_event.title,
+            notes=external_event.description,
+            location=external_event.location,
+            category=personal,
+            kind=Event.Kind.EVENT,
+            start_at=external_event.start_at,
+            end_at=external_event.end_at,
+            source=external_event.source,
+            external_id=external_event.external_id,
+        )
+        
+        serializer = EventSerializer(event)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 @extend_schema(
