@@ -1,3 +1,6 @@
+from datetime import datetime
+
+from django.db import transaction
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema
 from rest_framework import status, viewsets
@@ -9,7 +12,7 @@ from rest_framework.exceptions import NotFound
 from apps.common.mixins import OwnedQuerysetMixin
 from apps.common.timeutils import local_today, local_to_utc
 from .filters import EventFilter
-from .models import Event, Routine, ExternalEvent
+from .models import Event, Routine, ExternalEvent, TimetableEntry
 from .pagination import LargePageNumberPagination
 from .serializers import (
     AgendaItemSerializer,
@@ -20,6 +23,8 @@ from .serializers import (
     ExternalEventQuerySerializer,
     FreeSlotsQuerySerializer,
     RoutineSerializer,
+    TimetableEntrySerializer,
+    TimetableImportSerializer,
 )
 from .services import (
     agenda,
@@ -425,6 +430,135 @@ class ExternalEventViewSet(viewsets.ReadOnlyModelViewSet):
         
         serializer = EventSerializer(event)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+DAY_NAME_TO_WEEKDAY = {
+    "mon": 0, "monday": 0,
+    "tue": 1, "tuesday": 1,
+    "wed": 2, "wednesday": 2,
+    "thu": 3, "thursday": 3,
+    "fri": 4, "friday": 4,
+    "sat": 5, "saturday": 5,
+    "sun": 6, "sunday": 6,
+}
+
+
+class TimetableViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    ViewSet for the shared department timetable.
+    GET /timetable/ - list slots with filters (department, course_code, weekday, q)
+    POST /timetable/import/ - replace the whole timetable from a JSON payload
+    """
+    queryset = TimetableEntry.objects.all()
+    serializer_class = TimetableEntrySerializer
+    pagination_class = LargePageNumberPagination
+    permission_classes = [IsAuthenticated]
+    http_method_names = ["get", "post", "head", "options"]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        params = self.request.query_params
+
+        department = params.get("department")
+        if department:
+            queryset = queryset.filter(department__iexact=department)
+
+        course_code = params.get("course_code")
+        if course_code:
+            queryset = queryset.filter(course_code__icontains=course_code)
+
+        weekday = params.get("weekday")
+        if weekday is not None:
+            try:
+                queryset = queryset.filter(weekday=int(weekday))
+            except ValueError:
+                pass
+
+        q = params.get("q")
+        if q:
+            from django.db.models import Q
+            queryset = queryset.filter(
+                Q(course_code__icontains=q)
+                | Q(instructor__icontains=q)
+                | Q(room__icontains=q)
+            )
+
+        return queryset
+
+    @action(detail=False, methods=["post"], url_path="import")
+    def import_timetable(self, request):
+        """
+        POST /timetable/import/
+        Replaces the entire timetable with the rows in the payload.
+        Accepts {"timetable": [...]} or a bare list of row objects.
+        """
+        serializer = TimetableImportSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        rows = serializer.validated_data["timetable"]
+
+        entries = []
+        errors = []
+        for idx, row in enumerate(rows):
+            weekday = self._weekday_for(row)
+            start_time = self._parse_time(row.get("start_time"))
+            end_time = self._parse_time(row.get("end_time"))
+
+            if weekday is None or start_time is None or end_time is None:
+                errors.append({"index": idx, "detail": "Invalid day or time."})
+                continue
+            if end_time <= start_time:
+                errors.append({"index": idx, "detail": "end_time must be after start_time."})
+                continue
+
+            entries.append(
+                TimetableEntry(
+                    department=row["department"].strip().upper(),
+                    course_code=row["course_code"].strip(),
+                    section=(row.get("section") or "").strip(),
+                    weekday=weekday,
+                    start_time=start_time,
+                    end_time=end_time,
+                    room=(row.get("room") or "").strip(),
+                    instructor=(row.get("instructor") or "").strip(),
+                    marker=(row.get("marker") or "").strip(),
+                )
+            )
+
+        if errors and not entries:
+            return Response({"errors": errors}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            TimetableEntry.objects.all().delete()
+            TimetableEntry.objects.bulk_create(entries, ignore_conflicts=True)
+
+        return Response(
+            {
+                "imported": len(entries),
+                "skipped": len(errors),
+                "errors": errors[:20],
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @staticmethod
+    def _weekday_for(row):
+        day_no = row.get("day_no")
+        if day_no:
+            return day_no - 1  # 1=Mon -> 0
+        for key in ("day", "day_name"):
+            value = (row.get(key) or "").strip().lower()
+            if value in DAY_NAME_TO_WEEKDAY:
+                return DAY_NAME_TO_WEEKDAY[value]
+        return None
+
+    @staticmethod
+    def _parse_time(value):
+        if not value:
+            return None
+        try:
+            return datetime.strptime(value.strip(), "%H:%M").time()
+        except (ValueError, AttributeError):
+            return None
 
 
 @extend_schema(

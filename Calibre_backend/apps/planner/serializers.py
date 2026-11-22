@@ -4,7 +4,15 @@ from apps.common.timeutils import local_today
 from apps.common.models import Category
 from apps.tasks.models import Task
 
-from .models import Event, Routine, RoutineCheckin, ExternalEvent, CourseSchedule, DeletedEvent
+from .models import (
+    Event,
+    Routine,
+    RoutineCheckin,
+    ExternalEvent,
+    CourseSchedule,
+    DeletedEvent,
+    TimetableEntry,
+)
 
 
 class EventSerializer(serializers.ModelSerializer):
@@ -263,6 +271,63 @@ class ExternalEventSerializer(serializers.ModelSerializer):
             "end_at",
             "url",
         ]
+
+
+class TimetableEntrySerializer(serializers.ModelSerializer):
+    """Read serializer for timetable slots."""
+
+    class Meta:
+        model = TimetableEntry
+        fields = [
+            "id",
+            "department",
+            "course_code",
+            "section",
+            "weekday",
+            "start_time",
+            "end_time",
+            "room",
+            "instructor",
+            "marker",
+        ]
+        read_only_fields = fields
+
+
+class TimetableImportRowSerializer(serializers.Serializer):
+    """Validates one row of the timetable import payload."""
+
+    day = serializers.CharField(required=False, allow_blank=True)
+    day_name = serializers.CharField(required=False, allow_blank=True)
+    day_no = serializers.IntegerField(required=False, min_value=1, max_value=7)
+    start_time = serializers.CharField()
+    end_time = serializers.CharField()
+    department = serializers.CharField(max_length=10)
+    course_code = serializers.CharField(max_length=50)
+    section = serializers.CharField(max_length=10, required=False, allow_null=True, allow_blank=True)
+    marker = serializers.CharField(max_length=10, required=False, allow_null=True, allow_blank=True)
+    title = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    room = serializers.CharField(max_length=100, required=False, allow_null=True, allow_blank=True)
+    instructor = serializers.CharField(max_length=200, required=False, allow_null=True, allow_blank=True)
+
+
+class TimetableImportSerializer(serializers.Serializer):
+    """
+    Validates the timetable import payload.
+    Accepts either {"timetable": [...]} or a bare list of rows.
+    """
+
+    timetable = TimetableImportRowSerializer(many=True, required=False)
+
+    def to_internal_value(self, data):
+        # Allow a bare list payload as well as {"timetable": [...]}.
+        if isinstance(data, list):
+            data = {"timetable": data}
+        return super().to_internal_value(data)
+
+    def validate(self, attrs):
+        if not attrs.get("timetable"):
+            raise serializers.ValidationError({"timetable": "At least one row is required."})
+        return attrs
 
 
 class ExternalEventQuerySerializer(serializers.Serializer):

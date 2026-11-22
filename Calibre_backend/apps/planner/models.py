@@ -29,6 +29,40 @@ class CourseSchedule(TimeStampedModel):
         ]
 
 
+class TimetableEntry(TimeStampedModel):
+    """
+    One weekly lecture slot from the department timetable.
+    Shared reference data (not user-owned): one row per course-section-day-slot.
+    weekday uses Python convention: 0=Monday ... 6=Sunday (data only has Mon-Fri).
+    """
+    department = models.CharField(max_length=10)
+    course_code = models.CharField(max_length=50)
+    section = models.CharField(max_length=10, blank=True, default="")
+    weekday = models.PositiveSmallIntegerField()
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    room = models.CharField(max_length=100, blank=True, default="")
+    instructor = models.CharField(max_length=200, blank=True, default="")
+    marker = models.CharField(max_length=10, blank=True, default="")
+
+    class Meta:
+        db_table = "planner_timetableentry"
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "department", "course_code", "section",
+                    "weekday", "start_time", "end_time", "instructor",
+                ],
+                name="uniq_timetable_slot",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["course_code"]),
+            models.Index(fields=["weekday", "start_time"]),
+        ]
+        ordering = ["weekday", "start_time", "course_code"]
+
+
 class Event(OwnedModel):
     """
     A one-off calendar entry. A time block is an event with kind="block".

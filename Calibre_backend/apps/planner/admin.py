@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Event, Routine, RoutineCheckin
+from .models import Event, Routine, RoutineCheckin, TimetableEntry
 
 
 @admin.register(Event)
@@ -21,3 +21,10 @@ class RoutineAdmin(admin.ModelAdmin):
 class RoutineCheckinAdmin(admin.ModelAdmin):
     list_display = ("routine", "user", "date", "done")
     list_filter = ("done",)
+
+
+@admin.register(TimetableEntry)
+class TimetableEntryAdmin(admin.ModelAdmin):
+    list_display = ("course_code", "department", "section", "weekday", "start_time", "end_time", "room", "instructor")
+    list_filter = ("department", "weekday")
+    search_fields = ("course_code", "instructor", "room")

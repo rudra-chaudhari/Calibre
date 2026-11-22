@@ -17,11 +17,12 @@
 5. [Tasks](#tasks)
 6. [Events](#events)
 7. [External Events](#external-events)
-8. [Routines](#routines)
-9. [Routine Check-ins](#routine-check-ins)
-10. [Calendar Agenda](#calendar-agenda)
-11. [Free Slots](#free-slots)
-12. [Moodle Integration](#moodle-integration)
+8. [Timetable](#timetable)
+9. [Routines](#routines)
+10. [Routine Check-ins](#routine-check-ins)
+11. [Calendar Agenda](#calendar-agenda)
+12. [Free Slots](#free-slots)
+13. [Moodle Integration](#moodle-integration)
 
 ---
 
@@ -1251,6 +1252,121 @@ Authorization: Bearer <access_token>
 **Error Responses**:
 - `401`: Missing or invalid access token
 - `404`: External event not found or removed
+
+---
+
+## Timetable
+
+The timetable stores the shared department course schedule — one row per weekly lecture slot. It is reference data, not user-owned.
+
+### GET /timetable/
+
+List timetable entries with filtering and pagination.
+
+**Request Headers**:
+```
+Authorization: Bearer <access_token>
+```
+
+**Query Parameters** (all optional):
+- `department`: Filter by department code (e.g., `AE`, `CS`), case-insensitive
+- `course_code`: Filter by course code substring (e.g., `CS 101`)
+- `weekday`: Filter by weekday (0=Monday ... 6=Sunday)
+- `q`: Search across course_code, instructor, and room
+- `page`: Page number (default: 1)
+- `page_size`: Items per page (default: 20, max: 200)
+
+**Response** (200 OK):
+```json
+{
+  "count": 2865,
+  "next": "http://localhost:8000/api/v1/timetable/?page=2",
+  "previous": null,
+  "results": [
+    {
+      "id": 1,
+      "department": "AE",
+      "course_code": "AE 223",
+      "section": "",
+      "weekday": 0,
+      "start_time": "09:30:00",
+      "end_time": "10:25:00",
+      "room": "ESE 105",
+      "instructor": "Chandra Sekar Thyagarajan",
+      "marker": "M"
+    }
+  ]
+}
+```
+
+**Error Responses**:
+- `401`: Missing or invalid access token
+
+---
+
+### POST /timetable/import/
+
+Replace the entire timetable with the rows in the payload. Runs in one transaction — the table is never left half-imported.
+
+**Request Headers**:
+```
+Authorization: Bearer <access_token>
+```
+
+**Request Body** — accepts either `{"timetable": [...]}` or a bare list:
+```json
+{
+  "timetable": [
+    {
+      "day": "Mon",
+      "day_name": "Monday",
+      "day_no": 1,
+      "start_time": "09:30",
+      "end_time": "10:25",
+      "department": "AE",
+      "course_code": "AE 223",
+      "section": null,
+      "marker": "M",
+      "title": null,
+      "room": "ESE 105",
+      "instructor": "Chandra Sekar Thyagarajan"
+    }
+  ]
+}
+```
+
+**Field Mapping**:
+- `day_no` (1-5) or `day`/`day_name` → `weekday` (0=Monday ... 4=Friday)
+- `start_time`, `end_time` (`HH:MM`) → `start_time`, `end_time`
+- `department`, `course_code`, `section`, `room`, `instructor`, `marker` → stored as-is (nulls become empty strings)
+- `title` is accepted but ignored
+
+**Response** (200 OK):
+```json
+{
+  "imported": 2867,
+  "skipped": 0,
+  "errors": []
+}
+```
+
+Rows with invalid day/time or `end_time <= start_time` are skipped and reported in `errors` (first 20). Exact duplicate rows are ignored via the unique constraint.
+
+**Error Responses**:
+- `401`: Missing or invalid access token
+- `400`: Empty payload or every row invalid
+
+---
+
+### Management command: import_timetable
+
+Populate the timetable directly from a JSON file:
+
+```bash
+python manage.py import_timetable path/to/combined_timetable.json
+```
+
+Same replace-all semantics as the endpoint. Accepts `{"timetable": [...]}` or a bare list.
 
 ---
 
