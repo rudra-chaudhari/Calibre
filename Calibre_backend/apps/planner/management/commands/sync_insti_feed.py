@@ -19,13 +19,13 @@ class Command(BaseCommand):
         parser.add_argument(
             '--cutoff-days',
             type=int,
-            default=30,
-            help='Import events from this many days ago (default: 30)',
+            default=90,
+            help='Import events from this many days ago (default: 90)',
         )
 
     def handle(self, *args, **options):
         use_full = options.get('full', False)
-        cutoff_days = options.get('cutoff_days', 30)
+        cutoff_days = options.get('cutoff_days', 90)
         
         if use_full:
             # Full sync with events-all endpoint
@@ -125,7 +125,7 @@ class Command(BaseCommand):
         for item in items:
             # Only import approved events
             verification_status = item.get("verification_status", "").lower()
-            if verification_status != "approved":
+            if verification_status == "rejected":
                 continue
             
             # Parse start time
@@ -150,7 +150,7 @@ class Command(BaseCommand):
                     from zoneinfo import ZoneInfo
                     tz = ZoneInfo("Asia/Kolkata")  # Institute timezone
                     end_at = datetime.combine(start_date, datetime.max.time()).replace(tzinfo=tz)
-                    end_at = end_at.astimezone(timezone.utc)
+                    end_at = end_at.astimezone(timezone.UTC)
             else:
                 end_at = self.parse_datetime(item.get("end_time"))
                 if not end_at:
@@ -179,7 +179,7 @@ class Command(BaseCommand):
                 "location": location,
                 "start_at": start_at,
                 "end_at": end_at,
-                "url": item.get("website_url", ""),
+                "url": item.get("website_url") or "",
             }
             
             if event["external_id"] and event["title"]:
@@ -204,10 +204,10 @@ class Command(BaseCommand):
             try:
                 dt = datetime.strptime(dt_str, fmt)
                 if dt.tzinfo is None:
-                    dt = timezone.make_aware(dt, timezone.utc)
+                    dt = timezone.make_aware(dt, timezone.UTC)
                 else:
                     # Convert to UTC
-                    dt = dt.astimezone(timezone.utc)
+                    dt = dt.astimezone(timezone.UTC)
                 return dt
             except ValueError:
                 continue
