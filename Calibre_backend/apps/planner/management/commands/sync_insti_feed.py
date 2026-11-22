@@ -1,4 +1,4 @@
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 import requests
 from datetime import datetime, timedelta
@@ -55,15 +55,12 @@ class Command(BaseCommand):
                     )
                     time.sleep(retry_delay)
                 else:
-                    self.stdout.write(self.style.ERROR(f"Failed to fetch Institute feed after {max_retries} attempts: {e}"))
-                    return
+                    raise CommandError(f"Failed to fetch Institute feed after {max_retries} attempts: {e}")
             except ValueError as e:
-                self.stdout.write(self.style.ERROR(f"Invalid JSON response: {e}"))
-                return
+                raise CommandError(f"Invalid JSON response: {e}")
         
         if not data:
-            self.stdout.write(self.style.ERROR("No data received from Institute feed"))
-            return
+            raise CommandError("No data received from Institute feed")
         
         # Parse events from API response
         events = self.parse_api_response(data, cutoff_days)

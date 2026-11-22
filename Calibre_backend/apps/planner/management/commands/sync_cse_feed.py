@@ -1,4 +1,4 @@
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 import requests
 from datetime import datetime, timedelta
@@ -21,8 +21,7 @@ class Command(BaseCommand):
             response.raise_for_status()
             ics_content = response.text
         except requests.RequestException as e:
-            self.stdout.write(self.style.ERROR(f"Failed to fetch CSE feed: {e}"))
-            return
+            raise CommandError(f"Failed to fetch CSE feed: {e}")
         
         # Parse ICS format
         events = self.parse_ics(ics_content)
