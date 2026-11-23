@@ -4,6 +4,8 @@ import 'dart:math';
 import 'package:calibre/services/api_exception.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
+import 'package:calibre/services/auth_service.dart';
+import 'package:calibre/services/token_storage.dart';
 
 class MoodleToken {
   final String signature;
@@ -22,6 +24,26 @@ class MoodleToken {
 class MoodleService {
   static const String _site = 'https://moodle.iitb.ac.in';
   static const String _scheme = 'moodlemobile';
+
+    final AuthService _api = AuthService(TokenStorage());
+
+  Future<bool> isConnected() async {
+    final data = await _api.getJson('/moodle/status/');
+    return data['connected'] == true;
+  }
+
+  Future<void> connect() async {
+    final moodle = await fetchToken();
+    await _api.postJson('/moodle/connect/', {'token': moodle.token});
+  }
+
+  Future<void> sync() async {
+    await _api.postJson(
+      '/moodle/sync/',
+      {},
+      timeout: const Duration(seconds: 90),
+    );
+  }
 
   String _newPassport() {
     final random = Random.secure();

@@ -16,6 +16,9 @@ const List<EventColor> eventPalette = [
   EventColor('Butter', Color(0xFFFBF0C4), Color(0xFF7A6414)),
 ];
 
+const EventColor clashColor = EventColor('Clash', Color(0xFFFAD4D4), Color(0xFF8C2A2A));
+const EventColor freeColor = EventColor('Free', Color(0xFFD3F2D9), Color(0xFF1F6B3A));
+
 class CalendarInfo {
   final String id;
   final String name;
@@ -34,3 +37,4 @@ CalendarInfo calendarById(String id) {
     orElse: () => defaultCalendars.first,
   );
 }
+
