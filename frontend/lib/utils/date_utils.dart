@@ -1,4 +1,3 @@
-
 const List<String> monthnames = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December'
@@ -73,3 +72,14 @@ String timelabel(int minutes) {
   final suffix = (h % 24) < 12 ? 'AM' : 'PM';
   return '$h12:${m.toString().padLeft(2, '0')} $suffix';
 } 
+
+String isoDate(DateTime d) {
+  return '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+}
+
+int minutesOf(String time){
+
+  final parts = time.split(':');
+  return int.parse(parts[0]) * 60 + int.parse(parts[1]);
+
+}

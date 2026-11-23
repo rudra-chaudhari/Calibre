@@ -46,6 +46,7 @@ class TopBar extends StatelessWidget {
           ),
           SegmentedButton<int>(
             segments: const [
+              ButtonSegment(value: 2, label: Text('Month')),
               ButtonSegment(value: 0, label: Text('Week')),
               ButtonSegment(value: 1, label: Text('Day')),
             ],

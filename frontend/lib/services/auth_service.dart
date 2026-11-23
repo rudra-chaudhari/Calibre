@@ -7,6 +7,8 @@ import 'package:calibre/services/token_storage.dart';
 import 'package:http/http.dart' as http;
 
 class AuthService {
+  static Future<void>? _refreshing;
+
   final TokenStorage _tokens;
 
   AuthService(this._tokens);
@@ -44,7 +46,74 @@ class AuthService {
     return User.fromJson(_decode(response));
   }
 
-  Future<void> refresh() async {
+  Future<dynamic> getJson(String path) {
+    return _authed(
+      (access) =>
+          http.get(Uri.parse('$baseUrl$path'), headers: _headers(access)),
+    );
+  }
+
+  Future<Map<String, dynamic>> postJson(
+    String path,
+    Map<String, dynamic> body, {
+    Duration? timeout,
+  }) async {
+    final data = await _authed(
+      (access) => http.post(
+        Uri.parse('$baseUrl$path'),
+        headers: _headers(access),
+        body: jsonEncode(body),
+      ),
+      timeout,
+    );
+    return data as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> patchJson(
+    String path,
+    Map<String, dynamic> body,
+  ) async {
+    final data = await _authed(
+      (access) => http.patch(
+        Uri.parse('$baseUrl$path'),
+        headers: _headers(access),
+        body: jsonEncode(body),
+      ),
+    );
+    return data as Map<String, dynamic>;
+  }
+
+  Future<void> deleteJson(String path) async {
+    await _authed(
+      (access) =>
+          http.delete(Uri.parse('$baseUrl$path'), headers: _headers(access)),
+    );
+  }
+
+  Future<dynamic> _authed(
+    Future<http.Response> Function(String? access) request, [
+    Duration? timeout,
+  ]) async {
+    var access = await _tokens.readAccess();
+    if (access == null) {
+      throw ApiException('Not signed in', 401);
+    }
+    var response = await _send(() => request(access), timeout);
+    if (response.statusCode == 401) {
+      await refresh();
+      access = await _tokens.readAccess();
+      response = await _send(() => request(access), timeout);
+    }
+    return _decodeAny(response);
+  }
+
+  Future<void> refresh() {
+    return _refreshing ??= _refreshTokens().whenComplete(
+      () => _refreshing = null,
+    );
+  }
+
+  Future<void> _refreshTokens() async {
     final refreshToken = await _tokens.readRefresh();
     if (refreshToken == null) {
       throw ApiException('Not signed in', 401);
@@ -91,20 +160,27 @@ class AuthService {
     return _decode(response);
   }
 
-  Future<http.Response> _send(Future<http.Response> Function() request) async {
+  Future<http.Response> _send(
+    Future<http.Response> Function() request, [
+    Duration? timeout,
+  ]) async {
     try {
-      return await request().timeout(const Duration(seconds: 15));
+      return await request().timeout(timeout ?? const Duration(seconds: 15));
     } catch (_) {
       throw ApiException('Cannot reach the server. Check your connection.');
     }
   }
 
   Map<String, dynamic> _decode(http.Response response) {
+    return _decodeAny(response) as Map<String, dynamic>;
+  }
+
+  dynamic _decodeAny(http.Response response) {
     if (response.statusCode >= 200 && response.statusCode < 300) {
       if (response.body.isEmpty) {
         return {};
       }
-      return jsonDecode(response.body) as Map<String, dynamic>;
+      return jsonDecode(response.body);
     }
     throw ApiException(_errorMessage(response), response.statusCode);
   }

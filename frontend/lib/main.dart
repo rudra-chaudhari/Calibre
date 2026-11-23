@@ -1,9 +1,12 @@
 import 'package:calibre/screens/auth_gate.dart';
 import 'package:calibre/state/auth_state.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  if (kIsWeb) BrowserContextMenu.disableContextMenu();
   runApp(const MyApp());
 }
 

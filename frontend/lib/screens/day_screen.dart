@@ -1,5 +1,5 @@
+import 'package:calibre/widgets/week_grid.dart';
 import 'package:flutter/material.dart';
-import '../widgets/hour_grid.dart';
 
 class DayScreen extends StatelessWidget {
   final DateTime date;
@@ -9,7 +9,10 @@ class DayScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.transparent,
-      body: HourGrid(date : date),
+      body: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: WeekGrid(days: [date]),
+      ),
     );
   }
 }

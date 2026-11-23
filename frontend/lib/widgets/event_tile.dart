@@ -6,31 +6,46 @@ import 'package:flutter/material.dart';
 class EventTile extends StatelessWidget {
   final CalendarEvent event;
   final double height;
+  final EventColor? color;
+  final bool added;
+  final bool small;
 
-  const EventTile({super.key, required this.event, required this.height});
+  const EventTile({
+    super.key,
+    required this.event,
+    required this.height,
+    this.color,
+    this.added = false,
+    this.small = false,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final pal = eventPalette[event.colorIndex % eventPalette.length];
-    final compact = height < 40;
+    final pal = color ?? eventPalette[event.colorIndex % eventPalette.length];
+    final title = added ? '✓ ${event.title}' : event.title;
+    final compact = height < (small ? 44 : 52);
+    final titleLines = height < (small ? 64 : 80) ? 1 : 2;
     final titleStyle = TextStyle(
-      fontSize: 12,
+      fontSize: small ? 12 : 15,
       fontWeight: FontWeight.w700,
       color: pal.fg,
     );
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: EdgeInsets.symmetric(
+        horizontal: small ? 8 : 12,
+        vertical: small ? 4 : 6,
+      ),
       clipBehavior: Clip.hardEdge,
       decoration: BoxDecoration(
         color: pal.bg,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(small ? 10 : 12),
       ),
       child: compact
           ? Align(
               alignment: Alignment.centerLeft,
               child: Text(
-                event.title,
+                title,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: titleStyle,
@@ -41,8 +56,8 @@ class EventTile extends StatelessWidget {
               children: [
                 Flexible(
                   child: Text(
-                    event.title,
-                    maxLines: 2,
+                    title,
+                    maxLines: titleLines,
                     overflow: TextOverflow.ellipsis,
                     style: titleStyle,
                   ),
@@ -52,7 +67,7 @@ class EventTile extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: 10.5,
+                    fontSize: small ? 10.5 : 13,
                     color: pal.fg.withAlpha(200),
                   ),
                 ),
