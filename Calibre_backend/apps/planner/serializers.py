@@ -1,0 +1,347 @@
+from rest_framework import serializers
+
+from apps.common.timeutils import local_today
+from apps.common.models import Category
+from apps.tasks.models import Task
+
+from .models import (
+    Event,
+    Routine,
+    RoutineCheckin,
+    ExternalEvent,
+    CourseSchedule,
+    DeletedEvent,
+    TimetableEntry,
+)
+
+
+class EventSerializer(serializers.ModelSerializer):
+    """
+    Handles read/write for Event instances.
+    user, source, and external_id are read-only — callers cannot supply them.
+    Ownership of linked category and task is validated inline.
+    Supports repeat rule for creating recurring events.
+    """
+    repeat = serializers.DictField(required=False, write_only=True)
+
+    class Meta:
+        model = Event
+        fields = [
+            "id",
+            "title",
+            "notes",
+            "location",
+            "category",
+            "kind",
+            "task",
+            "start_at",
+            "end_at",
+            "remind_at",
+            "source",
+            "external_id",
+            "series_id",
+            "repeat",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "source", "external_id", "series_id", "created_at", "updated_at"]
+
+    def validate_title(self, value):
+        # Strip whitespace; empty string after stripping is invalid.
+        title = value.strip()
+        if not title:
+            raise serializers.ValidationError("Title cannot be empty.")
+        return title
+
+    def validate(self, attrs):
+        # On PATCH one or both of start_at/end_at may be missing; fall back to
+        # the stored instance values so the constraint is always checked.
+        instance = self.instance
+        start_at = attrs.get("start_at", instance.start_at if instance else None)
+        end_at = attrs.get("end_at", instance.end_at if instance else None)
+
+        if start_at and end_at and end_at < start_at:
+            raise serializers.ValidationError(
+                {"end_at": "end_at must be later than or equal to start_at."}
+            )
+        return attrs
+
+    def validate_repeat(self, value):
+        """Validate repeat rule: freq, weekdays, until, occurrence count limit."""
+        if not value:
+            return None
+        
+        freq = value.get("freq")
+        if freq not in ("daily", "weekly"):
+            raise serializers.ValidationError({"repeat": {"freq": "Must be 'daily' or 'weekly'."}})
+        
+        weekdays = value.get("weekdays", [])
+        if freq == "weekly":
+            if not weekdays:
+                raise serializers.ValidationError({"repeat": {"weekdays": "Weekdays required for weekly repeat."}})
+            if not all(isinstance(d, int) and 0 <= d <= 6 for d in weekdays):
+                raise serializers.ValidationError({"repeat": {"weekdays": "Weekdays must be integers 0-6."}})
+            if len(set(weekdays)) != len(weekdays):
+                raise serializers.ValidationError({"repeat": {"weekdays": "Weekdays must be unique."}})
+        
+        until = value.get("until")
+        if not until:
+            raise serializers.ValidationError({"repeat": {"until": "until date is required."}})
+        
+        # Calculate occurrence count and limit to 366
+        start_at = self.initial_data.get("start_at")
+        if start_at:
+            from datetime import datetime, timedelta
+            try:
+                start_dt = datetime.fromisoformat(start_at.replace("Z", "+00:00"))
+                until_dt = datetime.strptime(until, "%Y-%m-%d").date()
+                start_date = start_dt.date()
+                
+                if until_dt < start_date:
+                    raise serializers.ValidationError({"repeat": {"until": "until must be on or after start date."}})
+                
+                # Approximate count
+                if freq == "daily":
+                    days = (until_dt - start_date).days + 1
+                    if days > 366:
+                        raise serializers.ValidationError({"repeat": {"until": "Too many occurrences (max 366)."}})
+                elif freq == "weekly":
+                    weeks = (until_dt - start_date).days // 7 + 1
+                    if weeks * len(weekdays) > 366:
+                        raise serializers.ValidationError({"repeat": {"until": "Too many occurrences (max 366)."}})
+            except (ValueError, AttributeError):
+                pass  # Validation will fail on start_at anyway
+        
+        return value
+
+    def validate_category(self, value):
+        # Prevent attaching another user's category by guessing its id.
+        if value and value.user != self.context["request"].user:
+            raise serializers.ValidationError("Category does not belong to the user.")
+        return value
+
+    def validate_task(self, value):
+        # Same ownership check for the linked task.
+        if value and value.user != self.context["request"].user:
+            raise serializers.ValidationError("Task does not belong to the user.")
+        return value
+
+
+class RoutineSerializer(serializers.ModelSerializer):
+    """
+    Handles read/write for Routine instances.
+    start_date defaults to the user's local today when omitted on create.
+    """
+    start_date = serializers.DateField(required=False)
+
+    class Meta:
+        model = Routine
+        fields = [
+            "id",
+            "title",
+            "category",
+            "weekdays",
+            "start_time",
+            "end_time",
+            "start_date",
+            "end_date",
+            "is_active",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+    def validate_title(self, value):
+        title = value.strip()
+        if not title:
+            raise serializers.ValidationError("Title cannot be empty.")
+        return title
+
+    def validate_weekdays(self, value):
+        # Must be a non-empty list of unique integers 0–6.
+        if not value:
+            raise serializers.ValidationError("Weekdays cannot be empty.")
+        if not all(isinstance(d, int) and 0 <= d <= 6 for d in value):
+            raise serializers.ValidationError("Weekdays must be integers between 0 and 6.")
+        if len(set(value)) != len(value):
+            raise serializers.ValidationError("Weekdays must be unique.")
+        return sorted(value)
+
+    def validate(self, attrs):
+        instance = self.instance
+
+        # On PATCH, fall back to the instance's stored times/dates.
+        start_time = attrs.get("start_time", instance.start_time if instance else None)
+        end_time = attrs.get("end_time", instance.end_time if instance else None)
+        start_date = attrs.get("start_date", instance.start_date if instance else None)
+        end_date = attrs.get("end_date", instance.end_date if instance else None)
+
+        if start_time and end_time and end_time <= start_time:
+            raise serializers.ValidationError(
+                {"end_time": "end_time must be later than start_time."}
+            )
+        if start_date and end_date and end_date < start_date:
+            raise serializers.ValidationError(
+                {"end_date": "end_date must be on or after start_date."}
+            )
+        return attrs
+
+    def validate_category(self, value):
+        if value and value.user != self.context["request"].user:
+            raise serializers.ValidationError("Category does not belong to the user.")
+        return value
+
+    def create(self, validated_data):
+        # Default start_date to the user's local today when not supplied.
+        if "start_date" not in validated_data:
+            validated_data["start_date"] = local_today(
+                self.context["request"].user.timezone
+            )
+        return super().create(validated_data)
+
+
+class CheckinSerializer(serializers.Serializer):
+    """
+    Input: {date, done}.  Output: {routine, date, done} using RoutineCheckin fields.
+    Used for both the request body (POST) and the response body.
+    """
+    routine = serializers.IntegerField(source="routine_id", read_only=True)
+    date = serializers.DateField()
+    done = serializers.BooleanField(default=True)
+
+
+class AgendaQuerySerializer(serializers.Serializer):
+    """Validates query parameters for GET /calendar/agenda/."""
+    start_date = serializers.DateField()
+    end_date = serializers.DateField()
+
+    def validate(self, attrs):
+        start_date = attrs["start_date"]
+        end_date = attrs["end_date"]
+
+        if end_date < start_date:
+            raise serializers.ValidationError(
+                {"end_date": "end_date must be on or after start_date."}
+            )
+        if (end_date - start_date).days > 62:
+            raise serializers.ValidationError(
+                {"end_date": "Date range cannot exceed 62 days."}
+            )
+        return attrs
+
+
+class FreeSlotsQuerySerializer(serializers.Serializer):
+    """Validates query parameters for GET /free-slots/."""
+    date = serializers.DateField(required=False)
+    min_minutes = serializers.IntegerField(default=15, min_value=5, max_value=480)
+
+
+class AgendaItemSerializer(serializers.Serializer):
+    """
+    Output shape for a single agenda item (event, routine, or task).
+    Used only for schema documentation.
+    """
+    type = serializers.CharField()
+    id = serializers.IntegerField()
+    title = serializers.CharField()
+    start_at = serializers.CharField(allow_null=True)  # ISO string; null for tasks without due_at
+    end_at = serializers.CharField(allow_null=True)
+    category = serializers.IntegerField(allow_null=True)
+    status = serializers.CharField(allow_null=True)
+    details = serializers.DictField()
+    source = serializers.CharField(allow_null=True)
+    external_id = serializers.CharField(allow_null=True)
+    series_id = serializers.CharField(allow_null=True)
+
+
+class ExternalEventSerializer(serializers.ModelSerializer):
+    """
+    Serializer for shared external events from CSE/Institute feeds.
+    """
+    class Meta:
+        model = ExternalEvent
+        fields = [
+            "id",
+            "source",
+            "external_id",
+            "title",
+            "description",
+            "location",
+            "start_at",
+            "end_at",
+            "url",
+        ]
+
+
+class TimetableEntrySerializer(serializers.ModelSerializer):
+    """Read serializer for timetable slots."""
+
+    class Meta:
+        model = TimetableEntry
+        fields = [
+            "id",
+            "department",
+            "course_code",
+            "section",
+            "weekday",
+            "start_time",
+            "end_time",
+            "room",
+            "instructor",
+            "marker",
+        ]
+        read_only_fields = fields
+
+
+class TimetableImportRowSerializer(serializers.Serializer):
+    """Validates one row of the timetable import payload."""
+
+    day = serializers.CharField(required=False, allow_blank=True)
+    day_name = serializers.CharField(required=False, allow_blank=True)
+    day_no = serializers.IntegerField(required=False, min_value=1, max_value=7)
+    start_time = serializers.CharField()
+    end_time = serializers.CharField()
+    department = serializers.CharField(max_length=10)
+    course_code = serializers.CharField(max_length=50)
+    section = serializers.CharField(max_length=10, required=False, allow_null=True, allow_blank=True)
+    marker = serializers.CharField(max_length=10, required=False, allow_null=True, allow_blank=True)
+    title = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    room = serializers.CharField(max_length=100, required=False, allow_null=True, allow_blank=True)
+    instructor = serializers.CharField(max_length=200, required=False, allow_null=True, allow_blank=True)
+
+
+class TimetableImportSerializer(serializers.Serializer):
+    """
+    Validates the timetable import payload.
+    Accepts either {"timetable": [...]} or a bare list of rows.
+    """
+
+    timetable = TimetableImportRowSerializer(many=True, required=False)
+
+    def to_internal_value(self, data):
+        # Allow a bare list payload as well as {"timetable": [...]}.
+        if isinstance(data, list):
+            data = {"timetable": data}
+        return super().to_internal_value(data)
+
+    def validate(self, attrs):
+        if not attrs.get("timetable"):
+            raise serializers.ValidationError({"timetable": "At least one row is required."})
+        return attrs
+
+
+class ExternalEventQuerySerializer(serializers.Serializer):
+    """Validates query parameters for GET /external-events/."""
+    source = serializers.ChoiceField(choices=["cse", "insti"])
+    start_date = serializers.DateField()
+    end_date = serializers.DateField()
+
+    def validate(self, attrs):
+        start_date = attrs["start_date"]
+        end_date = attrs["end_date"]
+
+        if end_date < start_date:
+            raise serializers.ValidationError(
+                {"end_date": "end_date must be on or after start_date."}
+            )
+        return attrs
